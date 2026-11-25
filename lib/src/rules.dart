@@ -11,6 +11,10 @@ class FoosRules extends ArcadeRules<FoosLevel> {
   @override
   List<String> get optionalMechanics => const [];
 
+  /// İki kişilik: "Bilgisayara karşı" ve "Çevrimiçi masa" (gerçek zamanlı düello).
+  @override
+  int get localPlayers => 2;
+
   @override
   List<GameStat> get gameStats => const [
         GameStat('goals_scored', 'Atılan gol', 'Goals scored', scale: 500),

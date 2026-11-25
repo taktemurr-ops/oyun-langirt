@@ -2,6 +2,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:studio_core/app/arcade_duel_stage.dart';
 import 'package:studio_core/app/arcade_stage.dart';
 import 'package:studio_core/app/game_api.dart';
 import 'package:studio_core/core/game_rules.dart';
@@ -127,7 +128,15 @@ final langirtConfig = GameConfig(
   seedColor: const Color(0xFF3E7C4F),
   icon: Icons.sports_soccer_rounded,
   rules: FoosRules(),
-  buildPlay: (ctx) => ArcadeStage(
+  buildPlay: (ctx) => ctx.match != null
+      ? ArcadeDuelStage(
+          ctx: ctx,
+          create: () => FoosSim((ctx.generated as GeneratedLevel<FoosLevel>).puzzle),
+          paint: paintFoos,
+          bot: foosBot,
+          sound: foosSound,
+        )
+      : ArcadeStage(
     ctx: ctx,
     create: () => FoosSim((ctx.generated as GeneratedLevel<FoosLevel>).puzzle),
     paint: paintFoos,

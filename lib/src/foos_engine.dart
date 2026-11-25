@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:studio_core/core/arcade.dart';
+import 'package:studio_core/core/arcade_duel.dart';
 import 'package:studio_core/core/level_plan.dart';
 import 'package:studio_core/core/rng.dart';
 
@@ -41,7 +42,7 @@ const kRods = <Rod>[
   Rod(240, 1, [500], 170),
 ];
 
-class FoosSim extends ArcadeSim {
+class FoosSim extends ArcadeSim implements DuelSim {
   final FoosLevel level;
   double bx = 500, by = kMid, vx = 0, vy = 0;
   final off = List<double>.filled(kRods.length, 0);
@@ -53,6 +54,10 @@ class FoosSim extends ArcadeSim {
   int lastEvent = 0; // 1 kick, 2 goal for, 3 goal against, 4 bounce
   String flash = '';
   int flashTicks = 0;
+
+  /// Çevrimiçi düello: rakip çubuklarını karşıdaki oyuncu sürer (null: yapay zekâ).
+  ArcadeInput? _rival;
+  bool duel = false;
 
   FoosSim(this.level) : super(level.meta, lives: 3) {
     _setupMatch();
@@ -104,6 +109,12 @@ class FoosSim extends ArcadeSim {
       kick = 8;
       kicked = false;
     }
+    final rawRival = _rival;
+    final rival = rawRival == null ? null : mirrorInput(rawRival);
+    if (rival != null && (rival.tap || rival.swipe == 0) && cpuKick == 0) {
+      cpuKick = 8;
+      cpuKicked = false;
+    }
     final hasX = input.down && input.hasPointer;
     for (var i = 0; i < kRods.length; i++) {
       final r = kRods[i];
@@ -113,13 +124,19 @@ class FoosSim extends ArcadeSim {
         if (hasX) t = clampD(input.x - 500, -r.range, r.range);
         if (input.dirX != 0) t = clampD(off[i] + input.dirX * 30, -r.range, r.range);
         n = moveToward(off[i], t, 32);
+      } else if (rival != null) {
+        // Karşıdaki oyuncu: kendi ekranındaki parmak, masada aynalanmış.
+        var t = off[i];
+        if (rival.down && rival.hasPointer) t = clampD(rival.x - 500, -r.range, r.range);
+        if (rival.dirX != 0) t = clampD(off[i] + rival.dirX * 30, -r.range, r.range);
+        n = moveToward(off[i], t, 32);
       } else {
         n = moveToward(off[i], _cpuTarget(i), 3.5 + d * 0.6);
       }
       ov[i] = n - off[i];
       off[i] = n;
     }
-    _cpuKick();
+    if (rival == null) _cpuKick();
     if (pause > 0) {
       pause--;
       return;
@@ -172,7 +189,7 @@ class FoosSim extends ArcadeSim {
         final dy = (by - my) * fwd;
         final dx = bx - mx;
         if (dy > -8 && dy < 66 && dx.abs() < 44) {
-          final sp = owner == 0 ? 30.0 + (boost > 0 ? 8 : 0) : 20.0 + d;
+          final sp = owner == 0 ? 30.0 + (boost > 0 ? 8 : 0) : (_rival != null ? 30.0 : 20.0 + d);
           final ax = clampD(dx / 44 * 1.1 + ov[i] * 0.03, -1.2, 1.2);
           final n = math.sqrt(ax * ax + 1);
           vx = sp * ax / n;
@@ -308,6 +325,103 @@ class FoosSim extends ArcadeSim {
     _faceOff(mine ? 1 : 0);
   }
 
+  // ---- DuelSim ----
+
+  @override
+  set rivalInput(ArcadeInput? input) => _rival = input;
+
+  @override
+  void enableDuel() {
+    duel = true;
+    lives = 1;
+  }
+
+  @override
+  int get duelWinner => won ? 0 : (dead ? 1 : -1);
+
+  @override
+  List<double> netState() => [
+        ticks.toDouble(), bx, by, vx, vy, ...off, ...ov, //
+        kick.toDouble(), cpuKick.toDouble(), boost.toDouble(), pause.toDouble(), idle.toDouble(), zone.toDouble(),
+        kicked ? 1.0 : 0.0, cpuKicked ? 1.0 : 0.0,
+        myGoals.toDouble(), cpuGoals.toDouble(), toWin.toDouble(),
+        flashCode(flash, _flashes).toDouble(), flashTicks.toDouble(), lastEvent.toDouble(), score.toDouble(),
+        won ? 1.0 : 0.0, dead ? 1.0 : 0.0,
+      ];
+
+  @override
+  void applyNetState(List<double> s) {
+    const k = 5 + 2 * 8;
+    if (s.length < k + 17) return;
+    int n(int i) => s[i].round();
+    ticks = n(0);
+    bx = s[1];
+    by = s[2];
+    vx = s[3];
+    vy = s[4];
+    for (var i = 0; i < kRods.length; i++) {
+      off[i] = s[5 + i];
+      ov[i] = s[13 + i];
+    }
+    kick = n(k);
+    cpuKick = n(k + 1);
+    boost = n(k + 2);
+    pause = n(k + 3);
+    idle = n(k + 4);
+    zone = n(k + 5);
+    kicked = s[k + 6] > 0.5;
+    cpuKicked = s[k + 7] > 0.5;
+    myGoals = n(k + 8);
+    cpuGoals = n(k + 9);
+    toWin = n(k + 10);
+    flash = _flashes[n(k + 11).clamp(0, _flashes.length - 1)];
+    flashTicks = n(k + 12);
+    lastEvent = n(k + 13);
+    score = n(k + 14);
+    if (s[k + 15] > 0.5 && !won) win();
+    if (s[k + 16] > 0.5 && !dead) {
+      lives = 1;
+      shield = 0;
+      hit();
+    }
+  }
+
+  @override
+  List<double> lerpNet(List<double> a, List<double> b, double f) =>
+      lerpAt(a, b, f, const [1, 2, 5, 6, 7, 8, 9, 10, 11, 12]);
+
+  @override
+  void mirrorView() {
+    bx = kWorldW - bx;
+    by = kWorldH - by;
+    vx = -vx;
+    vy = -vy;
+    final o = List<double>.of(off), v = List<double>.of(ov);
+    final last = kRods.length - 1;
+    for (var i = 0; i < kRods.length; i++) {
+      off[i] = -o[last - i];
+      ov[i] = -v[last - i];
+    }
+    final k = kick, kd = kicked;
+    kick = cpuKick;
+    kicked = cpuKicked;
+    cpuKick = k;
+    cpuKicked = kd;
+    final g = myGoals;
+    myGoals = cpuGoals;
+    cpuGoals = g;
+    if (lastEvent == 2) {
+      lastEvent = 3;
+    } else if (lastEvent == 3) {
+      lastEvent = 2;
+    }
+    if (flash == 'GOAL!') {
+      flash = 'GOAL ×';
+    } else if (flash == 'GOAL ×') {
+      flash = 'GOAL!';
+    }
+  }
+
   @override
   void onLifeLost() {
     if (matchMode) {
@@ -346,6 +460,8 @@ class FoosSim extends ArcadeSim {
     return math.min(lifeStars(this, 3), q);
   }
 }
+
+const _flashes = ['', 'GOAL!', 'GOAL ×'];
 
 /// x of a straight path at height [y], with side-rail reflections.
 double pathX(double x0, double y0, double ax, double y) {
